@@ -30,6 +30,9 @@ if 'state_manager' not in st.session_state:
     st.session_state.priority_agent = PrioritizationAgent(st.session_state.state_manager)
     st.session_state.sprint_agent = SprintAgent(st.session_state.state_manager)
     st.session_state.retention_agent = RetentionAgent(st.session_state.state_manager)
+    
+    # Initialize sprint cache
+    st.session_state.state_manager.set('sprints.generated_sprints', {})
 
 
 def render_sidebar():
@@ -156,7 +159,15 @@ def render_main_content():
                     exam_probability_map = state_manager.get('intelligence.exam_probability_map')
                     
                     if exam_probability_map:
+                        # Set topics from probability map
+                        state_manager.set('intelligence.topics', list(exam_probability_map.keys()))
+                        
+                        # Reset confidence scores for all topics
+                        confidence_scores = {topic: 0.5 for topic in exam_probability_map.keys()}
+                        state_manager.set('intelligence.confidence_scores', confidence_scores)
+                        
                         st.success(f"✅ Loaded {university} exam patterns!")
+                        st.info("📌 Topics aligned with university exam pattern.")
                         st.markdown("---")
                         st.subheader("📊 Topic Probability Analysis")
                         
@@ -177,11 +188,136 @@ def render_main_content():
                     st.error(f"❌ Error loading pattern data: {str(e)}")
             else:
                 st.warning("⚠️ Please configure university in sidebar first")
+        
+        st.markdown("---")
+        
+        if st.button("Generate Priority Ranking"):
+            state_manager = st.session_state.state_manager
+            exam_probability_map = state_manager.get('intelligence.exam_probability_map')
+            
+            if exam_probability_map:
+                try:
+                    priority_agent = st.session_state.priority_agent
+                    
+                    # Generate priority ranking
+                    priority_agent.generate_priority_ranking()
+                    
+                    # Retrieve ranked topics and scores
+                    ranked_topics = state_manager.get('priorities.ranked_topics')
+                    priority_scores = state_manager.get('intelligence.priority_scores')
+                    
+                    if ranked_topics and priority_scores:
+                        st.success("✅ Priority ranking generated!")
+                        st.markdown("---")
+                        st.subheader("🎯 Priority Ranking")
+                        
+                        # Display ranked topics
+                        for rank, topic in enumerate(ranked_topics, 1):
+                            score = priority_scores.get(topic, 0.0)
+                            display_text = f"**Rank {rank}** | {topic} | Priority Score: {score:.2f}"
+                            
+                            # Highlight top 3 with success, others with info
+                            if rank <= 3:
+                                st.success(display_text)
+                            else:
+                                st.info(display_text)
+                    else:
+                        st.warning("⚠️ No ranking data available")
+                        
+                except Exception as e:
+                    st.error(f"❌ Error generating priorities: {str(e)}")
+            else:
+                st.warning("⚠️ Please load university pattern first")
     
     with tab3:
         st.header("Sprint Planning")
-        st.write("Create focused study sprints")
-        st.button("Create New Sprint")
+        st.write("Generate focused study sprints with AI-generated content")
+        
+        state_manager = st.session_state.state_manager
+        ranked_topics = state_manager.get('priorities.ranked_topics')
+        
+        if ranked_topics:
+            # Topic selection dropdown
+            selected_topic = st.selectbox(
+                "Select Topic for Sprint",
+                options=ranked_topics,
+                help="Topics are ordered by priority. Top priority topics appear first."
+            )
+            
+            if st.button("Start Sprint", type="primary"):
+                sprint_cache = state_manager.get('sprints.generated_sprints') or {}
+                
+                # Check if sprint exists in cache
+                if selected_topic in sprint_cache:
+                    st.info("♻️ Using cached sprint (no API call made)")
+                    sprint_content = sprint_cache[selected_topic]
+                else:
+                    # Generate new sprint with API call
+                    try:
+                        with st.spinner(f"Generating sprint for {selected_topic}..."):
+                            sprint_agent = st.session_state.sprint_agent
+                            sprint_content = sprint_agent.generate_sprint(selected_topic, generate_response)
+                        
+                        # Cache the result
+                        sprint_cache[selected_topic] = sprint_content
+                        state_manager.set('sprints.generated_sprints', sprint_cache)
+                        
+                        st.success("✅ Sprint generated successfully!")
+                    
+                    except Exception as e:
+                        # Fallback: check if cached version exists
+                        if selected_topic in sprint_cache:
+                            st.warning("⚠️ API error. Using cached version.")
+                            sprint_content = sprint_cache[selected_topic]
+                        else:
+                            st.error("❌ Sprint generation temporarily unavailable. Please retry.")
+                            st.error(f"Error: {str(e)}")
+                            sprint_content = None
+                
+                # Display sprint content
+                if sprint_content:
+                    st.markdown("---")
+                    st.subheader(f"⚡ Sprint: {selected_topic}")
+                    
+                    # Section 1: Summary
+                    st.markdown("### 📝 Summary")
+                    st.write(sprint_content.get('summary', 'No summary available'))
+                    
+                    st.markdown("---")
+                    
+                    # Section 2: Active Recall Questions
+                    st.markdown("### 🧠 Active Recall Questions")
+                    active_recall = sprint_content.get('active_recall_questions', [])
+                    if active_recall:
+                        for i, question in enumerate(active_recall, 1):
+                            st.write(f"{i}. {question}")
+                    else:
+                        st.write("No active recall questions available")
+                    
+                    st.markdown("---")
+                    
+                    # Section 3: Application Question
+                    st.markdown("### 📊 Application Question")
+                    app_question = sprint_content.get('application_question', 'No application question available')
+                    st.write(app_question)
+                    
+                    st.markdown("---")
+                    
+                    # Section 4: MCQs
+                    st.markdown("### ✅ Multiple Choice Questions")
+                    mcqs = sprint_content.get('mcqs', [])
+                    if mcqs:
+                        for i, mcq in enumerate(mcqs, 1):
+                            st.markdown(f"**Question {i}:** {mcq.get('question', 'N/A')}")
+                            options = mcq.get('options', [])
+                            for idx, option in enumerate(options):
+                                st.write(f"  {chr(65 + idx)}. {option}")
+                            st.markdown(f"<small style='color: gray;'>Correct Answer: {mcq.get('answer', 'N/A')}</small>", unsafe_allow_html=True)
+                            st.write("")
+                    else:
+                        st.write("No MCQs available")
+        else:
+            st.warning("⚠️ Generate priority ranking first.")
     
     with tab4:
         st.header("Retention Optimization")
