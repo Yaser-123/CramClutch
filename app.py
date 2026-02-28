@@ -6,12 +6,15 @@ import streamlit as st
 from datetime import datetime, date
 import re
 import pdfplumber
+import tempfile
+import os
 from state_manager import StateManager
 from agents.crisis_agent import CrisisAgent
 from agents.exam_pattern_agent import ExamPatternAgent
 from agents.prioritization_agent import PrioritizationAgent
 from agents.sprint_agent import SprintAgent
 from agents.retention_agent import RetentionAgent
+from agents.revision_agent import RevisionAgent
 from llm_client import generate_response
 
 
@@ -32,6 +35,102 @@ if 'state_manager' not in st.session_state:
     st.session_state.priority_agent = PrioritizationAgent(st.session_state.state_manager)
     st.session_state.sprint_agent = SprintAgent(st.session_state.state_manager)
     st.session_state.retention_agent = RetentionAgent(st.session_state.state_manager)
+    st.session_state.revision_agent = RevisionAgent(st.session_state.state_manager)
+
+# Ensure revision_agent exists (backward compatibility)
+if 'revision_agent' not in st.session_state:
+    st.session_state.revision_agent = RevisionAgent(st.session_state.state_manager)
+
+
+def generate_revision_pdf(revision_notes):
+    """
+    Generate a PDF file from revision notes
+    
+    Args:
+        revision_notes: Dictionary of topics and bullet points
+    
+    Returns:
+        str: Path to generated PDF file
+    """
+    try:
+        from reportlab.lib.pagesizes import letter, A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import inch
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+        from reportlab.lib.enums import TA_LEFT, TA_CENTER
+        
+        # Create temporary file
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+        pdf_path = temp_file.name
+        temp_file.close()
+        
+        # Create PDF document
+        doc = SimpleDocTemplate(pdf_path, pagesize=letter)
+        story = []
+        styles = getSampleStyleSheet()
+        
+        # Custom styles
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            textColor='#2C3E50',
+            spaceAfter=30,
+            alignment=TA_CENTER
+        )
+        
+        topic_style = ParagraphStyle(
+            'TopicHeader',
+            parent=styles['Heading2'],
+            fontSize=16,
+            textColor='#34495E',
+            spaceAfter=12,
+            spaceBefore=20
+        )
+        
+        bullet_style = ParagraphStyle(
+            'BulletPoint',
+            parent=styles['Normal'],
+            fontSize=11,
+            leftIndent=20,
+            spaceAfter=8
+        )
+        
+        # Add title
+        title = Paragraph("Quick Revision Notes", title_style)
+        story.append(title)
+        story.append(Spacer(1, 0.2 * inch))
+        
+        # Add timestamp
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+        timestamp_para = Paragraph(f"<i>Generated on {timestamp}</i>", styles['Normal'])
+        story.append(timestamp_para)
+        story.append(Spacer(1, 0.3 * inch))
+        
+        # Add revision notes
+        for topic, points in revision_notes.items():
+            # Add topic header
+            topic_para = Paragraph(topic, topic_style)
+            story.append(topic_para)
+            
+            # Add bullet points
+            for point in points:
+                # Escape special characters
+                clean_point = point.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                bullet_para = Paragraph(f"• {clean_point}", bullet_style)
+                story.append(bullet_para)
+            
+            story.append(Spacer(1, 0.2 * inch))
+        
+        # Build PDF
+        doc.build(story)
+        
+        return pdf_path
+    
+    except ImportError:
+        # Fallback to simple text-based PDF if reportlab not available
+        raise Exception("reportlab library not installed. Please install it: pip install reportlab")
 
 
 def render_sidebar():
@@ -350,9 +449,6 @@ def render_main_content():
                         # Process uploaded PDFs if no pasted text
                         elif uploaded_files:
                             with st.spinner("Extracting questions from PDFs..."):
-                                import tempfile
-                                import os
-                                
                                 for uploaded_file in uploaded_files:
                                     # Save file temporarily
                                     with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
@@ -605,9 +701,6 @@ def render_main_content():
                         with st.spinner("Extracting text from notes..."):
                             if uploaded_notes.type == "application/pdf":
                                 # Extract from PDF
-                                import tempfile
-                                import os
-                                
                                 with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
                                     tmp_file.write(uploaded_notes.getvalue())
                                     tmp_file_path = tmp_file.name
@@ -1095,6 +1188,72 @@ Text:
                 st.info(f"💡 **Recommended next sprint:** {lowest_topic[0]} (Confidence: {lowest_topic[1]:.2f})")
         else:
             st.success("✅ All topics stable. No weak areas detected.")
+        
+        st.markdown("---")
+        
+        # Section 4: Quick Revision Notes
+        st.markdown("### 📝 Quick Revision Notes")
+        st.write("Generate ultra-concise revision notes for top priority topics")
+        
+        if st.button("📚 Generate Quick Revision Notes", type="primary"):
+            with st.spinner("Generating revision notes..."):
+                try:
+                    revision_agent = st.session_state.revision_agent
+                    result = revision_agent.generate_revision_notes(generate_response)
+                    
+                    if result['status'] == 'success':
+                        st.success("✅ Revision notes generated successfully!")
+                        st.rerun()
+                    elif result['status'] == 'cached':
+                        st.info("♻️ Using cached revision notes")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {result.get('message', 'Failed to generate notes')}")
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
+        
+        # Display revision notes if available
+        revision_notes = state_manager.get('revision_notes')
+        
+        if revision_notes:
+            st.markdown("---")
+            st.markdown("### 📖 Your Revision Notes")
+            
+            # Display notes
+            for topic, points in revision_notes.items():
+                st.markdown(f"#### {topic}")
+                for point in points:
+                    st.write(f"• {point}")
+                st.write("")  # Spacing
+            
+            # Download as PDF button
+            st.markdown("---")
+            
+            try:
+                # Generate PDF
+                pdf_path = generate_revision_pdf(revision_notes)
+                
+                # Read PDF file
+                with open(pdf_path, 'rb') as pdf_file:
+                    pdf_bytes = pdf_file.read()
+                
+                # Clean up temporary file
+                if os.path.exists(pdf_path):
+                    os.unlink(pdf_path)
+                
+                # Show download button
+                col1, col2 = st.columns([3, 1])
+                with col2:
+                    st.download_button(
+                        label="📥 Download PDF",
+                        data=pdf_bytes,
+                        file_name="revision_notes.pdf",
+                        mime="application/pdf",
+                        type="primary"
+                    )
+            
+            except Exception as e:
+                st.error(f"❌ Error generating PDF: {str(e)}")
     
     with tab5:
         st.header("Crisis Mode")
