@@ -67,6 +67,82 @@ class ExamPatternAgent:
         
         return probability_map
     
+    def process_text_to_questions(self, text):
+        """
+        Extract questions from text (from PDF or manual paste)
+        
+        Args:
+            text: Raw text containing questions
+        
+        Returns:
+            list: Extracted questions
+        """
+        # Clean up common noise patterns
+        lines = text.split('\n')
+        cleaned_lines = []
+        
+        # Noise patterns to skip
+        noise_patterns = [
+            r'^Page \d+',
+            r'^\*+$',
+            r'^Code No:',
+            r'COLLEGE|UNIVERSITY|ENGINEERING',
+            r'Autonomous.*Institution',
+            r'B\.Tech.*Semester',
+            r'Examinations.*\d{4}',
+            r'^\s*R\d+\s*$',
+            r'^Time:.*Marks',
+            r'Note:.*'
+        ]
+        
+        for line in lines:
+            line = line.strip()
+            # Skip empty lines
+            if not line:
+                continue
+            # Skip noise patterns
+            if any(re.search(pattern, line, re.IGNORECASE) for pattern in noise_patterns):
+                continue
+            cleaned_lines.append(line)
+        
+        # Rejoin cleaned text
+        cleaned_text = '\n'.join(cleaned_lines)
+        
+        # Split by question numbers - multiple patterns
+        # Pattern: "1." or "Q1." or "Question 1."
+        questions = re.split(r'\n(?:Q(?:uestion)?\s*)?(\d+)[.)]\s+', cleaned_text)
+        
+        # The split creates alternating question numbers and content
+        # Combine them properly
+        cleaned_questions = []
+        for i in range(1, len(questions), 2):
+            if i + 1 <= len(questions):
+                question_text = questions[i + 1].strip()
+                # Only keep substantial questions (more than 20 chars)
+                if len(question_text) > 20:
+                    cleaned_questions.append(question_text)
+        
+        # If no questions found with numbered pattern, try alternative method
+        if not cleaned_questions:
+            # Look for lines that seem like questions (contain "?" or end with certain keywords)
+            question_indicators = [
+                r'\?',  # Contains question mark
+                r'\bexplain\b',
+                r'\bdescribe\b',
+                r'\bcompare\b',
+                r'\bdiscuss\b',
+                r'\bwrite\b',
+                r'\bdefine\b',
+                r'\blist\b'
+            ]
+            
+            for line in cleaned_lines:
+                if any(re.search(pattern, line, re.IGNORECASE) for pattern in question_indicators):
+                    if len(line) > 20:
+                        cleaned_questions.append(line)
+        
+        return cleaned_questions
+    
     def process_uploaded_paper(self, file_path):
         """
         Extract questions from uploaded exam paper PDF
@@ -75,28 +151,34 @@ class ExamPatternAgent:
             file_path: Path to PDF file
         
         Returns:
-            list: Extracted questions
+            dict or list: If error, returns {"error": "message"}, otherwise list of questions
         """
         try:
-            # Extract text from PDF
+            # Extract text from PDF with better layout preservation
             full_text = ""
             with pdfplumber.open(file_path) as pdf:
                 for page in pdf.pages:
-                    page_text = page.extract_text()
+                    # Use layout extraction for better quality
+                    page_text = page.extract_text(layout=True)
                     if page_text:
                         full_text += page_text + "\n"
             
-            # Improved regex split - handles first question and requires whitespace
-            questions = re.split(r"\n?\d+\.\s", full_text)
+            # Check if PDF appears to be scanned or unreadable
+            if len(full_text.strip()) < 200:
+                return {
+                    "error": "PDF appears to be scanned or unreadable. Please paste questions manually."
+                }
             
-            # Clean empty entries and strip whitespace
-            cleaned_questions = [q.strip() for q in questions if q.strip()]
+            # Process the text to extract questions
+            cleaned_questions = self.process_text_to_questions(full_text)
             
             return cleaned_questions
             
         except Exception:
-            # Return empty list if processing fails
-            return []
+            # Return error dict if processing fails
+            return {
+                "error": "Failed to process PDF. Please paste questions manually."
+            }
     
     def classify_questions_with_llm(self, questions, syllabus_topics, llm_client):
         """
@@ -174,6 +256,86 @@ Ensure each question number is mapped to exactly one topic from the syllabus lis
             }
             
         except (json.JSONDecodeError, KeyError, AttributeError, IndexError):
+            # Safe fallback on parsing errors
+            return {"topic_counts": {}, "mapping": {}}
+    
+    def generate_dynamic_topics_from_questions(self, questions, llm_client):
+        """
+        Dynamically identify exam units/themes from questions using LLM clustering
+        
+        Args:
+            questions: List of question strings
+            llm_client: Callable that takes prompt and returns LLM response text
+        
+        Returns:
+            dict: Contains topic_counts and mapping
+        """
+        if not questions:
+            return {"topic_counts": {}, "mapping": {}}
+        
+        # Build numbered question list
+        questions_str = "\n".join([f"{i+1}. {q[:200]}" for i, q in enumerate(questions)])
+        
+        prompt = f"""Analyze these exam questions and identify 5-8 major exam units or themes.
+Group related questions together under meaningful unit names.
+
+Questions:
+{questions_str}
+
+Return ONLY a JSON object mapping unit names to question numbers:
+{{
+  "units": {{
+    "Unit Name 1": [1, 3, 5],
+    "Unit Name 2": [2, 4, 6],
+    ...
+  }}
+}}
+
+Requirements:
+- Create 5-8 distinct units
+- Use clear, descriptive unit names
+- Assign each question to exactly one unit
+- Cover all {len(questions)} questions"""
+        
+        try:
+            # Call LLM
+            llm_response = llm_client(prompt)
+            
+            # Parse JSON from response
+            response_text = llm_response.strip()
+            if "```json" in response_text:
+                response_text = response_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in response_text:
+                response_text = response_text.split("```")[1].split("```")[0].strip()
+            
+            data = json.loads(response_text)
+            units = data.get("units", {})
+            
+            # Initialize topic counts
+            topic_counts = {}
+            question_mapping = {}
+            
+            # Process each unit
+            for unit_name, question_numbers in units.items():
+                count = len(question_numbers)
+                topic_counts[unit_name] = count
+                
+                # Map question text to unit name
+                for q_num in question_numbers:
+                    try:
+                        idx = int(q_num) - 1  # Convert to 0-based index
+                        if 0 <= idx < len(questions):
+                            question_text = questions[idx]
+                            question_mapping[question_text] = unit_name
+                    except (ValueError, IndexError):
+                        continue
+            
+            return {
+                "topic_counts": topic_counts,
+                "mapping": question_mapping
+            }
+            
+        except (json.JSONDecodeError, KeyError, AttributeError, ValueError):
             # Safe fallback on parsing errors
             return {"topic_counts": {}, "mapping": {}}
     

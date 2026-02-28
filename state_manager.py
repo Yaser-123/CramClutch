@@ -1,6 +1,8 @@
 """
 Shared State Manager - Central state management for all agents
 """
+import json
+import os
 from datetime import datetime
 
 
@@ -8,6 +10,7 @@ class StateManager:
     """Centralized state management for the exam preparation system"""
     
     def __init__(self):
+        self.file_path = "state_backup.json"
         self.state = {
             # User profile
             "user": {
@@ -58,6 +61,7 @@ class StateManager:
             "sprints": {
                 "active_sprint": None,
                 "completed_sprints": [],
+                "generated_sprints": {},
                 "schedule": []
             },
             
@@ -71,6 +75,9 @@ class StateManager:
                 "preparedness_score": 0.0
             }
         }
+        
+        # Load persisted state if available
+        self.load_from_file()
     
     def get(self, key_path):
         """
@@ -103,6 +110,7 @@ class StateManager:
         for key in keys[:-1]:
             target = target[key]
         target[keys[-1]] = value
+        self.save_to_file()
     
     def update(self, category, updates):
         """
@@ -114,6 +122,7 @@ class StateManager:
         """
         if category in self.state:
             self.state[category].update(updates)
+        self.save_to_file()
     
     def reset(self):
         """Reset state to initial values"""
@@ -122,3 +131,21 @@ class StateManager:
     def get_state(self):
         """Get entire state dictionary"""
         return self.state
+    
+    def save_to_file(self):
+        """Save state to JSON file"""
+        try:
+            with open(self.file_path, 'w') as f:
+                json.dump(self.state, f, indent=2)
+        except Exception:
+            pass  # Silently ignore save errors
+    
+    def load_from_file(self):
+        """Load state from JSON file if it exists"""
+        try:
+            if os.path.exists(self.file_path):
+                with open(self.file_path, 'r') as f:
+                    loaded_state = json.load(f)
+                    self.state = loaded_state
+        except Exception:
+            pass  # Keep default state on error

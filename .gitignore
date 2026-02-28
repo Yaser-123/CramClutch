@@ -33,3 +33,6 @@ wheels/
 # OS
 .DS_Store
 Thumbs.db
+
+# State persistence
+state_backup.json

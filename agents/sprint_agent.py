@@ -29,7 +29,15 @@ Create a focused study sprint with the following components:
 1. A concise 2-minute summary explaining the key concepts
 2. Four active recall questions to test understanding
 3. One scenario-based application question
-4. Three multiple-choice questions (MCQs) with 4 options each
+4. Generate exactly 10 multiple choice questions.
+
+Rules for MCQs:
+- Each question must have:
+    - 'question'
+    - 'options': exactly 4 options labeled A, B, C, D
+    - 'answer': must be exactly one of 'A', 'B', 'C', or 'D'
+- Do NOT return fewer or more than 10 MCQs.
+- Ensure answer strictly matches one of the option labels.
 
 Return ONLY a JSON object in this exact format:
 {{
@@ -39,19 +47,20 @@ Return ONLY a JSON object in this exact format:
   "mcqs": [
     {{
       "question": "MCQ question text",
-      "options": ["Option A", "Option B", "Option C", "Option D"],
-      "answer": "Option A"
+      "options": ["A", "B", "C", "D"],
+      "answer": "A"
     }},
     {{
       "question": "MCQ question text",
-      "options": ["Option A", "Option B", "Option C", "Option D"],
-      "answer": "Option B"
+      "options": ["A", "B", "C", "D"],
+      "answer": "B"
     }},
     {{
       "question": "MCQ question text",
-      "options": ["Option A", "Option B", "Option C", "Option D"],
-      "answer": "Option C"
-    }}
+      "options": ["A", "B", "C", "D"],
+      "answer": "C"
+    }},
+    ... (continue until you have exactly 10 MCQs)
   ]
 }}
 
