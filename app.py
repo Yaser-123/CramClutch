@@ -561,13 +561,28 @@ def render_main_content():
                                 # If using dynamic topics, update syllabus topics in state
                                 if use_dynamic_topics:
                                     discovered_topics = list(merged_topic_counts.keys())
-                                    state_manager.set('intelligence.topics', discovered_topics)
                                     
-                                    # Initialize confidence scores for discovered topics
-                                    confidence_scores = {topic: 0.5 for topic in discovered_topics}
-                                    state_manager.set('intelligence.confidence_scores', confidence_scores)
+                                    # MERGE with existing topics instead of overwriting
+                                    existing_topics = state_manager.get('intelligence.topics') or []
+                                    existing_confidence = state_manager.get('intelligence.confidence_scores') or {}
                                     
-                                    st.info(f"🔍 Discovered {len(discovered_topics)} topics from uploaded papers")
+                                    # Combine old and new topics (preserve order, avoid duplicates)
+                                    merged_topics = list(existing_topics)
+                                    for topic in discovered_topics:
+                                        if topic not in merged_topics:
+                                            merged_topics.append(topic)
+                                    
+                                    state_manager.set('intelligence.topics', merged_topics)
+                                    
+                                    # Preserve existing confidence scores, initialize new topics with 0.5
+                                    updated_confidence = dict(existing_confidence)
+                                    for topic in discovered_topics:
+                                        if topic not in updated_confidence:
+                                            updated_confidence[topic] = 0.5
+                                    
+                                    state_manager.set('intelligence.confidence_scores', updated_confidence)
+                                    
+                                    st.info(f"🔍 Discovered {len(discovered_topics)} topics from uploaded papers (merged with existing)")
                                 
                                 # Compute probabilities
                                 pattern_agent.compute_historical_probabilities()
@@ -833,7 +848,11 @@ Text:
         
         st.markdown("---")
         
+        # Get ranked topics with fallback to intelligence.topics
         ranked_topics = state_manager.get('priorities.ranked_topics')
+        if not ranked_topics:
+            # Fallback: use intelligence.topics if ranking not generated yet
+            ranked_topics = state_manager.get('intelligence.topics') or []
         
         if ranked_topics:
             # Cache management section
@@ -951,158 +970,206 @@ Text:
                 mcqs = sprint_content.get('mcqs', [])
                 
                 if mcqs:
-                    # Check if answers have been submitted
-                    submission_key = f"submitted_{active_topic}"
-                    answers_submitted = st.session_state.get(submission_key, False)
+                    # VALIDATION: Check MCQ structure before allowing quiz
+                    mcqs_valid = True
+                    validation_errors = []
                     
-                    # Store user answers
-                    user_answers = {}
-                    
-                    # Display each MCQ with radio buttons
                     for i, mcq in enumerate(mcqs, 1):
-                        question_text = mcq.get('question', 'N/A')
+                        if not isinstance(mcq, dict):
+                            mcqs_valid = False
+                            validation_errors.append(f"MCQ {i}: Invalid structure")
+                            continue
+                        
+                        if 'question' not in mcq or not mcq.get('question'):
+                            mcqs_valid = False
+                            validation_errors.append(f"MCQ {i}: Missing question")
+                        
                         options = mcq.get('options', [])
-                        correct_answer = mcq.get('answer', '')
+                        if not isinstance(options, list) or len(options) != 4:
+                            mcqs_valid = False
+                            validation_errors.append(f"MCQ {i}: Must have exactly 4 options")
                         
-                        st.markdown(f"**Question {i}:** {question_text}")
-                        
-                        # Create radio button for options
-                        if options:
-                            # Create option labels (A, B, C, D)
-                            option_labels = [f"{chr(65 + idx)}. {opt}" for idx, opt in enumerate(options)]
-                            
-                            selected = st.radio(
-                                f"Select your answer for Question {i}:",
-                                option_labels,
-                                key=f"{active_topic}_mcq_{i}",
-                                label_visibility="collapsed",
-                                disabled=answers_submitted
-                            )
-                            
-                            # Extract the letter (A, B, C, D) from selection
-                            if selected:
-                                user_answers[i] = selected[0]  # Get first character (A, B, C, or D)
-                            
-                            # Show correct answer after submission
-                            if answers_submitted:
-                                user_choice = user_answers.get(i, '')
-                                if user_choice == correct_answer:
-                                    st.success(f"✅ Correct! Answer: {correct_answer}")
-                                else:
-                                    st.error(f"❌ Incorrect. Your answer: {user_choice} | Correct answer: {correct_answer}")
-                        
-                        st.write("")  # Spacing
+                        answer = mcq.get('answer', '')
+                        if answer not in ['A', 'B', 'C', 'D']:
+                            mcqs_valid = False
+                            validation_errors.append(f"MCQ {i}: Answer must be A, B, C, or D (got '{answer}')")
                     
-                    st.markdown("---")
-                    
-                    # Submit button
-                    if not answers_submitted:
-                        if st.button("📝 Submit Answers", type="primary"):
-                            # Calculate score
-                            correct_count = 0
-                            total_questions = len(mcqs)
+                    if not mcqs_valid:
+                        st.error("❌ MCQ validation failed. Cannot score this sprint.")
+                        with st.expander("🔍 Validation Errors"):
+                            for error in validation_errors:
+                                st.write(f"- {error}")
+                        st.warning("💡 Try regenerating the sprint or contact support.")
+                    else:
+                        # MCQs are valid, proceed with quiz
+                        # Check if answers have been submitted
+                        submission_key = f"submitted_{active_topic}"
+                        answers_submitted = st.session_state.get(submission_key, False)
+                        
+                        # Store user answers
+                        user_answers = {}
+                        
+                        # Display each MCQ with radio buttons
+                        for i, mcq in enumerate(mcqs, 1):
+                            question_text = mcq.get('question', 'N/A')
+                            options = mcq.get('options', [])
+                            correct_answer = mcq.get('answer', '')
                             
-                            for i, mcq in enumerate(mcqs, 1):
-                                correct_answer = mcq.get('answer', '')
-                                user_answer = user_answers.get(i, '')
+                            st.markdown(f"**Question {i}:** {question_text}")
+                            
+                            # Create radio button for options
+                            if options:
+                                # Create option labels (A, B, C, D)
+                                option_labels = [f"{chr(65 + idx)}. {opt}" for idx, opt in enumerate(options)]
                                 
-                                if user_answer == correct_answer:
-                                    correct_count += 1
+                                selected = st.radio(
+                                    f"Select your answer for Question {i}:",
+                                    option_labels,
+                                    key=f"{active_topic}_mcq_{i}",
+                                    label_visibility="collapsed",
+                                    disabled=answers_submitted
+                                )
+                                
+                                # Extract the letter (A, B, C, D) from selection
+                                if selected:
+                                    user_answers[i] = selected[0]  # Get first character (A, B, C, or D)
+                                
+                                # Show correct answer after submission
+                                if answers_submitted:
+                                    user_choice = user_answers.get(i, '')
+                                    if user_choice == correct_answer:
+                                        st.success(f"✅ Correct! Answer: {correct_answer}")
+                                    else:
+                                        st.error(f"❌ Incorrect. Your answer: {user_choice} | Correct answer: {correct_answer}")
                             
-                            # Calculate confidence score
-                            confidence_score = correct_count / total_questions if total_questions > 0 else 0.0
-                            
-                            # Update retention agent
-                            retention_agent = st.session_state.retention_agent
-                            result = retention_agent.update_after_sprint(active_topic, confidence_score)
-                            
-                            # Update progress tracking
-                            if confidence_score >= 0.6:
-                                # Mark topic as completed
-                                completed_topics = state_manager.get('progress.completed_topics') or []
-                                if active_topic not in completed_topics:
-                                    completed_topics.append(active_topic)
-                                    state_manager.set('progress.completed_topics', completed_topics)
-                            
-                            # Recalculate syllabus coverage
-                            total_topics_list = state_manager.get('intelligence.topics') or []
-                            total_topics = len(total_topics_list)
-                            completed_count = len(state_manager.get('progress.completed_topics') or [])
-                            
-                            if total_topics > 0:
-                                coverage = completed_count / total_topics
-                            else:
-                                coverage = 0.0
-                            
-                            state_manager.set('progress.syllabus_coverage', coverage)
-                            
-                            # Increment study time (assume 0.5 hours per sprint)
-                            current_study_time = state_manager.get('progress.total_study_time') or 0
-                            state_manager.set('progress.total_study_time', current_study_time + 0.5)
-                            
-                            # Mark as submitted
-                            st.session_state[submission_key] = True
-                            
-                            # Store results for display
-                            st.session_state[f"score_{active_topic}"] = correct_count
-                            st.session_state[f"total_{active_topic}"] = total_questions
-                            st.session_state[f"confidence_{active_topic}"] = confidence_score
-                            st.session_state[f"result_{active_topic}"] = result
-                            
-                            st.rerun()
-                    
-                    # Display results after submission
-                    if answers_submitted:
-                        st.markdown("### 📊 Results")
-                        
-                        score = st.session_state.get(f"score_{active_topic}", 0)
-                        total = st.session_state.get(f"total_{active_topic}", 10)
-                        confidence = st.session_state.get(f"confidence_{active_topic}", 0.0)
-                        result = st.session_state.get(f"result_{active_topic}", {})
-                        
-                        # Display score
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.metric("Score", f"{score} / {total}")
-                        with col2:
-                            st.metric("Confidence", f"{confidence * 100:.1f}%")
+                            st.write("")  # Spacing
                         
                         st.markdown("---")
                         
-                        # Display preparedness score
-                        preparedness_score = result.get('preparedness_score', 0.0)
-                        weak_areas = result.get('weak_areas', [])
+                        # Submit button
+                        if not answers_submitted:
+                            if st.button("📝 Submit Answers", type="primary"):
+                                # Calculate score
+                                correct_count = 0
+                                total_questions = len(mcqs)
+                                
+                                for i, mcq in enumerate(mcqs, 1):
+                                    correct_answer = mcq.get('answer', '')
+                                    user_answer = user_answers.get(i, '')
+                                    
+                                    if user_answer == correct_answer:
+                                        correct_count += 1
+                                
+                                # Calculate confidence score
+                                confidence_score = correct_count / total_questions if total_questions > 0 else 0.0
+                                
+                                # Update retention agent
+                                retention_agent = st.session_state.retention_agent
+                                result = retention_agent.update_after_sprint(active_topic, confidence_score)
+                                
+                                # Get submission history
+                                submission_history = state_manager.get('sprints.submission_history') or {}
+                                topic_history = submission_history.get(active_topic, {})
+                                
+                                # Track attempts and best score
+                                attempts = topic_history.get('attempts', 0) + 1
+                                best_score = max(topic_history.get('best_score', 0.0), confidence_score)
+                                
+                                # Update submission history
+                                submission_history[active_topic] = {
+                                    'attempts': attempts,
+                                    'best_score': best_score
+                                }
+                                state_manager.set('sprints.submission_history', submission_history)
+                                
+                                # Only increment study time on FIRST successful attempt (>= 60%)
+                                if attempts == 1 and confidence_score >= 0.6:
+                                    current_study_time = state_manager.get('progress.total_study_time') or 0
+                                    state_manager.set('progress.total_study_time', current_study_time + 0.5)
+                                
+                                # Update progress tracking
+                                if confidence_score >= 0.6:
+                                    # Mark topic as completed
+                                    completed_topics = state_manager.get('progress.completed_topics') or []
+                                    if active_topic not in completed_topics:
+                                        completed_topics.append(active_topic)
+                                        state_manager.set('progress.completed_topics', completed_topics)
+                                
+                                # Recalculate syllabus coverage
+                                total_topics_list = state_manager.get('intelligence.topics') or []
+                                total_topics = len(total_topics_list)
+                                completed_count = len(state_manager.get('progress.completed_topics') or [])
+                                
+                                if total_topics > 0:
+                                    coverage = completed_count / total_topics
+                                else:
+                                    coverage = 0.0
+                                
+                                state_manager.set('progress.syllabus_coverage', coverage)
+                                
+                                # Mark as submitted
+                                st.session_state[submission_key] = True
+                                
+                                # Store results for display
+                                st.session_state[f"score_{active_topic}"] = correct_count
+                                st.session_state[f"total_{active_topic}"] = total_questions
+                                st.session_state[f"confidence_{active_topic}"] = confidence_score
+                                st.session_state[f"result_{active_topic}"] = result
+                                
+                                st.rerun()
                         
-                        st.markdown("### 📈 Preparedness Score")
-                        prep_percentage = preparedness_score * 100
-                        
-                        if preparedness_score >= 0.7:
-                            st.success(f"**{prep_percentage:.1f}%** - Great progress!")
-                        elif preparedness_score >= 0.5:
-                            st.info(f"**{prep_percentage:.1f}%** - Keep going!")
-                        else:
-                            st.warning(f"**{prep_percentage:.1f}%** - Focus on weak areas")
-                        
-                        # Display weak areas
-                        st.markdown("### 🧠 Weak Areas")
-                        if weak_areas:
-                            for area in weak_areas:
-                                st.write(f"- {area}")
-                        else:
-                            st.success("No weak areas detected.")
-                        
-                        # Reset button
-                        if st.button("🔄 Retake Test"):
-                            st.session_state[submission_key] = False
-                            if f"score_{active_topic}" in st.session_state:
-                                del st.session_state[f"score_{active_topic}"]
-                            if f"total_{active_topic}" in st.session_state:
-                                del st.session_state[f"total_{active_topic}"]
-                            if f"confidence_{active_topic}" in st.session_state:
-                                del st.session_state[f"confidence_{active_topic}"]
-                            if f"result_{active_topic}" in st.session_state:
-                                del st.session_state[f"result_{active_topic}"]
-                            st.rerun()
+                        # Display results after submission
+                        if answers_submitted:
+                            st.markdown("### 📊 Results")
+                            
+                            score = st.session_state.get(f"score_{active_topic}", 0)
+                            total = st.session_state.get(f"total_{active_topic}", 10)
+                            confidence = st.session_state.get(f"confidence_{active_topic}", 0.0)
+                            result = st.session_state.get(f"result_{active_topic}", {})
+                            
+                            # Display score
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.metric("Score", f"{score} / {total}")
+                            with col2:
+                                st.metric("Confidence", f"{confidence * 100:.1f}%")
+                            
+                            st.markdown("---")
+                            
+                            # Display preparedness score
+                            preparedness_score = result.get('preparedness_score', 0.0)
+                            weak_areas = result.get('weak_areas', [])
+                            
+                            st.markdown("### 📈 Preparedness Score")
+                            prep_percentage = preparedness_score * 100
+                            
+                            if preparedness_score >= 0.7:
+                                st.success(f"**{prep_percentage:.1f}%** - Great progress!")
+                            elif preparedness_score >= 0.5:
+                                st.info(f"**{prep_percentage:.1f}%** - Keep going!")
+                            else:
+                                st.warning(f"**{prep_percentage:.1f}%** - Focus on weak areas")
+                            
+                            # Display weak areas
+                            st.markdown("### 🧠 Weak Areas")
+                            if weak_areas:
+                                for area in weak_areas:
+                                    st.write(f"- {area}")
+                            else:
+                                st.success("No weak areas detected.")
+                            
+                            # Reset button
+                            if st.button("🔄 Retake Test"):
+                                st.session_state[submission_key] = False
+                                if f"score_{active_topic}" in st.session_state:
+                                    del st.session_state[f"score_{active_topic}"]
+                                if f"total_{active_topic}" in st.session_state:
+                                    del st.session_state[f"total_{active_topic}"]
+                                if f"confidence_{active_topic}" in st.session_state:
+                                    del st.session_state[f"confidence_{active_topic}"]
+                                if f"result_{active_topic}" in st.session_state:
+                                    del st.session_state[f"result_{active_topic}"]
+                                st.rerun()
                 else:
                     st.write("No MCQs available")
         else:

@@ -62,7 +62,9 @@ class StateManager:
                 "active_sprint": None,
                 "completed_sprints": [],
                 "generated_sprints": {},
-                "schedule": []
+                "schedule": [],
+                "submission_history": {},
+                "submission_locked": {}
             },
             
             # Intelligence and analytics
@@ -73,7 +75,14 @@ class StateManager:
                 "priority_scores": {},
                 "psi": 0.0,
                 "preparedness_score": 0.0
-            }
+            },
+            
+            # Notes and revision
+            "notes_chunks": None,
+            "notes_index": None,
+            "notes_file_name": None,
+            "revision_notes": None,
+            "revision_cache_meta": None
         }
         
         # Load persisted state if available
@@ -137,8 +146,8 @@ class StateManager:
         try:
             with open(self.file_path, 'w') as f:
                 json.dump(self.state, f, indent=2)
-        except Exception:
-            pass  # Silently ignore save errors
+        except Exception as e:
+            print(f"Warning: Failed to save state: {str(e)}")  # Don't crash, just warn
     
     def load_from_file(self):
         """Load state from JSON file if it exists"""

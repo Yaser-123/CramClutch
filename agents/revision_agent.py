@@ -21,14 +21,6 @@ class RevisionAgent:
         Returns:
             dict: Revision notes by topic or cached result
         """
-        # Check cache first
-        cached_notes = self.state_manager.get('revision_notes')
-        if cached_notes:
-            return {
-                'status': 'cached',
-                'notes': cached_notes
-            }
-        
         # Retrieve exam probability map and ranked topics
         exam_probability_map = self.state_manager.get('intelligence.exam_probability_map') or {}
         ranked_topics = self.state_manager.get('priorities.ranked_topics') or []
@@ -53,6 +45,21 @@ class RevisionAgent:
         # Select top 3-5 topics (minimum 3, maximum 5)
         num_topics = min(5, max(3, len(ranked_topics)))
         selected_topics = ranked_topics[:num_topics]
+        
+        # Calculate topics hash for cache validation
+        topics_hash = hash(tuple(sorted(selected_topics)))
+        
+        # Check cache with hash validation
+        cached_notes = self.state_manager.get('revision_notes')
+        cached_meta = self.state_manager.get('revision_cache_meta')
+        
+        if cached_notes and cached_meta:
+            cached_hash = cached_meta.get('topics_hash')
+            if cached_hash == topics_hash:
+                return {
+                    'status': 'cached',
+                    'notes': cached_notes
+                }
         
         # Build efficient prompt for all topics in one call
         topics_list = "\n".join([f"- {topic}" for topic in selected_topics])
@@ -87,8 +94,11 @@ Return ONLY the JSON object, no additional text."""
             revision_notes = self._parse_response(response, selected_topics)
             
             if revision_notes:
-                # Store in state
+                # Store in state with cache metadata
                 self.state_manager.set('revision_notes', revision_notes)
+                self.state_manager.set('revision_cache_meta', {
+                    'topics_hash': topics_hash
+                })
                 
                 return {
                     'status': 'success',
