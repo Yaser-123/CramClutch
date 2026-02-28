@@ -138,8 +138,45 @@ def render_main_content():
     
     with tab2:
         st.header("Topic Prioritization")
-        st.write("Agent will prioritize topics based on exam patterns")
-        st.button("Generate Priorities")
+        st.write("Load historical exam patterns and analyze topic probabilities")
+        
+        if st.button("Load University Pattern", type="primary"):
+            state_manager = st.session_state.state_manager
+            university = state_manager.get('user.university')
+            
+            if university:
+                try:
+                    pattern_agent = st.session_state.pattern_agent
+                    
+                    # Load university data and compute probabilities
+                    pattern_agent.load_university_data(university)
+                    pattern_agent.compute_historical_probabilities()
+                    
+                    # Retrieve probability map from state
+                    exam_probability_map = state_manager.get('intelligence.exam_probability_map')
+                    
+                    if exam_probability_map:
+                        st.success(f"✅ Loaded {university} exam patterns!")
+                        st.markdown("---")
+                        st.subheader("📊 Topic Probability Analysis")
+                        
+                        # Create table data
+                        table_data = []
+                        for topic, probability in exam_probability_map.items():
+                            table_data.append({
+                                "Topic": topic,
+                                "Probability %": f"{probability * 100:.1f}%"
+                            })
+                        
+                        # Display as table
+                        st.table(table_data)
+                    else:
+                        st.warning("⚠️ No probability data available")
+                        
+                except Exception as e:
+                    st.error(f"❌ Error loading pattern data: {str(e)}")
+            else:
+                st.warning("⚠️ Please configure university in sidebar first")
     
     with tab3:
         st.header("Sprint Planning")
