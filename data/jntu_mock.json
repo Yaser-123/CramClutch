@@ -1,0 +1,12 @@
+{
+  "university": "JNTU",
+  "topics": {
+    "Arrays and Linked Lists": 20,
+    "Trees and Graphs": 25,
+    "Sorting Algorithms": 15,
+    "Stacks and Queues": 12,
+    "Hashing": 10,
+    "Graph Algorithms": 18
+  },
+  "total_marks": 100
+}

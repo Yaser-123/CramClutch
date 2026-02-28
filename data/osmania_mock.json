@@ -1,0 +1,12 @@
+{
+  "university": "Osmania",
+  "topics": {
+    "Process Scheduling": 22,
+    "Memory Management": 25,
+    "Deadlocks": 18,
+    "File Systems": 15,
+    "I/O Systems": 10,
+    "Security": 10
+  },
+  "total_marks": 100
+}
